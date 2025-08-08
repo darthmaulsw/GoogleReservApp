@@ -1,6 +1,8 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { AdminSettings, CustomDay, TimeSlot } from "../../lib/adminSettings";
+import { AdminSettings, CustomDay, TimeSlot, fetchAdminSettings, updateAdminSettings } from "../../lib/adminSettings";
+import { signOut, useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 
 const defaultSettings: AdminSettings = {
   maxPeople: 20,
@@ -40,6 +42,8 @@ const defaultSettings: AdminSettings = {
 };
 
 export default function AdminPanel() {
+  const { data: session } = useSession();
+  const router = useRouter();
   const [settings, setSettings] = useState<AdminSettings>(defaultSettings);
   const [saved, setSaved] = useState(false);
   const [showAddCustomDay, setShowAddCustomDay] = useState(false);
@@ -51,51 +55,40 @@ export default function AdminPanel() {
     note: ""
   });
 
+  // Redirect if not authenticated
   useEffect(() => {
-    // Load settings from localStorage (in a real app, this would be from a database)
-    const savedSettings = localStorage.getItem('restaurantSettings');
-    if (savedSettings) {
-      try {
-        const parsed = JSON.parse(savedSettings);
-        if (!parsed.customDays) {
-          parsed.customDays = [];
-        }
-        // Ensure new fields exist for backward compatibility
-        if (!parsed.maxAccommodation) {
-          parsed.maxAccommodation = 20;
-        }
-        if (!parsed.avgReservationLength) {
-          parsed.avgReservationLength = 90;
-        }
-        setSettings(parsed);
-      } catch {
-        setSettings(defaultSettings);
-      }
+    if (session === null) {
+      router.push('/login');
     }
+  }, [session, router]);
+
+  // Fetch settings from DB on mount
+  useEffect(() => {
+    fetchAdminSettings().then((dbSettings) => {
+      setSettings({
+        ...dbSettings,
+        days: typeof dbSettings.daysJson === 'string' ? JSON.parse(dbSettings.daysJson) : dbSettings.daysJson,
+        customDays: typeof dbSettings.customDaysJson === 'string' ? JSON.parse(dbSettings.customDaysJson) : dbSettings.customDaysJson,
+      });
+    });
   }, []);
 
-  const saveSettings = () => {
-    localStorage.setItem('restaurantSettings', JSON.stringify(settings));
+  // Track changes to settings
+  useEffect(() => {
+    setHasChanges(true);
+  }, [settings]);
+
+  const saveSettings = async () => {
+    const toSave = {
+      ...settings,
+      days: settings.days,
+      customDays: settings.customDays,
+    };
+    await updateAdminSettings(toSave);
     setSaved(true);
     setHasChanges(false);
     setTimeout(() => setSaved(false), 2000);
   };
-
-  // Track changes to settings
-  useEffect(() => {
-    const savedSettings = localStorage.getItem('restaurantSettings');
-    if (savedSettings) {
-      try {
-        const parsed = JSON.parse(savedSettings);
-        const hasSettingsChanged = JSON.stringify(parsed) !== JSON.stringify(settings);
-        setHasChanges(hasSettingsChanged);
-      } catch {
-        setHasChanges(true);
-      }
-    } else {
-      setHasChanges(true);
-    }
-  }, [settings]);
 
   const updateMaxPeople = (value: number) => {
     setSettings(prev => ({ ...prev, maxPeople: value }));
@@ -273,11 +266,32 @@ export default function AdminPanel() {
     });
   };
 
+  const handleLogout = async () => {
+    await signOut({ callbackUrl: '/login' });
+  };
+
+  if (!session) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
+
   return (
     <main className="min-h-screen bg-[#cce6f4] p-6">
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-xl shadow-lg p-8">
-          <h1 className="text-3xl font-bold text-[#175676] mb-8">Admin Panel</h1>
+          <div className="flex justify-between items-center mb-8">
+            <h1 className="text-3xl font-bold text-[#175676]">Admin Panel</h1>
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-gray-600">
+                Welcome, {session.user?.email}
+              </span>
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
           
           {/* Maximum People Setting */}
           <div className="mb-8">

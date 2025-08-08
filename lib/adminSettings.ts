@@ -1,4 +1,4 @@
-// Admin settings management utilities
+import { AdminSettings } from '@prisma/client';
 
 export interface TimeSlot {
   start: string;
@@ -70,25 +70,20 @@ export const defaultSettings: AdminSettings = {
   customDays: []
 };
 
-export const getAdminSettings = (): AdminSettings => {
-  if (typeof window === 'undefined') {
-    return defaultSettings;
-  }
-  
-  const savedSettings = localStorage.getItem('restaurantSettings');
-  if (savedSettings) {
-    try {
-      const parsed = JSON.parse(savedSettings);
-      // Ensure customDays exists for backward compatibility
-      if (!parsed.customDays) {
-        parsed.customDays = [];
-      }
-      return parsed;
-    } catch {
-      return defaultSettings;
-    }
-  }
-  return defaultSettings;
+export const fetchAdminSettings = async (): Promise<AdminSettings> => {
+  const res = await fetch('/api/admin/settings');
+  if (!res.ok) throw new Error('Failed to fetch admin settings');
+  return res.json();
+};
+
+export const updateAdminSettings = async (settings: Partial<AdminSettings>): Promise<AdminSettings> => {
+  const res = await fetch('/api/admin/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error('Failed to update admin settings');
+  return res.json();
 };
 
 export const getMaxPeople = (): number => {

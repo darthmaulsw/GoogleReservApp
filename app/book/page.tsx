@@ -1,6 +1,5 @@
 "use client";
 import React, { useState, useRef, useEffect } from "react";
-import { getMaxPeople, generateTimeSlotsForDate, getAvgReservationLength } from "../../lib/adminSettings";
 
 function getDaysInMonth(year: number, month: number) {
   return new Date(year, month + 1, 0).getDate();
@@ -12,11 +11,75 @@ function getFirstDayOfWeek(year: number, month: number) {
 
 const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-// Generate time slots for a specific date based on admin settings
-const generateTimeSlotsForDateWithDisplay = (date: Date) => {
-  const timeSlots = generateTimeSlotsForDate(date);
+// Check if a time slot is in the past for today
+const isTimeInPast = (date: Date, timeString: string): boolean => {
+  const today = new Date();
+  const [hours, minutes] = timeString.split(':').map(Number);
+  const slotTime = new Date(date);
+  slotTime.setHours(hours, minutes, 0, 0);
   
-  return timeSlots.map(timeString => {
+  return slotTime <= today;
+};
+
+// Generate time slots for a specific date based on admin settings
+const generateTimeSlotsForDateWithDisplay = (date: Date, adminSettings: any) => {
+  if (!adminSettings) return [];
+  
+  // Parse the days JSON
+  const days = typeof adminSettings.daysJson === 'string' ? JSON.parse(adminSettings.daysJson) : adminSettings.daysJson;
+  const customDays = typeof adminSettings.customDaysJson === 'string' ? JSON.parse(adminSettings.customDaysJson) : adminSettings.customDaysJson;
+  
+  // Check for custom day first
+  const dateString = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+  const customDay = customDays.find((cd: any) => cd.date === dateString);
+  
+  let daySettings;
+  if (customDay) {
+    daySettings = customDay;
+  } else {
+    // Use regular weekly schedule
+    const dayOfWeek = date.getDay();
+    const dayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayKey = dayKeys[dayOfWeek];
+    daySettings = days[dayKey];
+  }
+  
+  if (!daySettings || !daySettings.enabled) {
+    return [];
+  }
+  
+  const slots: string[] = [];
+  
+  daySettings.timeSlots.forEach((timeSlot: any) => {
+    const startHour = parseInt(timeSlot.start.split(':')[0]);
+    const startMinute = parseInt(timeSlot.start.split(':')[1]);
+    const endHour = parseInt(timeSlot.end.split(':')[0]);
+    const endMinute = parseInt(timeSlot.end.split(':')[1]);
+    
+    let currentHour = startHour;
+    let currentMinute = startMinute;
+    
+    while (
+      currentHour < endHour || 
+      (currentHour === endHour && currentMinute < endMinute)
+    ) {
+      const timeString = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
+      slots.push(timeString);
+      
+      // Add 15 minutes
+      currentMinute += 15;
+      if (currentMinute >= 60) {
+        currentMinute = 0;
+        currentHour += 1;
+      }
+    }
+  });
+  
+  // Filter out past times if the date is today
+  const isToday = date.toDateString() === new Date().toDateString();
+  const filteredSlots = isToday ? slots.filter(timeString => !isTimeInPast(date, timeString)) : slots;
+  
+  return filteredSlots.map(timeString => {
     const hour = parseInt(timeString.split(':')[0]);
     const minute = parseInt(timeString.split(':')[1]);
     const displayTime = `${hour > 12 ? hour - 12 : hour}:${minute.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}`;
@@ -35,6 +98,7 @@ export default function BookPage() {
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [maxPeople, setMaxPeople] = useState(20);
   const [avgReservationLength, setAvgReservationLength] = useState(90);
+  const [adminSettings, setAdminSettings] = useState<any>(null);
   const timePickerRef = useRef<HTMLDivElement>(null);
   
   // Booking form state
@@ -58,10 +122,23 @@ export default function BookPage() {
   const daysInMonth = getDaysInMonth(currentYear, currentMonth);
   const firstDayOfWeek = getFirstDayOfWeek(currentYear, currentMonth);
 
-  // Load admin settings
+  // Load admin settings from API
   useEffect(() => {
-    setMaxPeople(getMaxPeople());
-    setAvgReservationLength(getAvgReservationLength());
+    const fetchSettings = async () => {
+      try {
+        const response = await fetch('/api/admin/settings');
+        if (response.ok) {
+          const settings = await response.json();
+          setAdminSettings(settings);
+          setMaxPeople(settings.maxPeople);
+          setAvgReservationLength(settings.avgReservationLength);
+        }
+      } catch (error) {
+        console.error('Failed to fetch admin settings:', error);
+      }
+    };
+    
+    fetchSettings();
   }, []);
 
   const handlePrevMonth = () => {
@@ -109,6 +186,10 @@ export default function BookPage() {
   };
 
   const handleTimeSelect = (time: string) => {
+    // Don't allow selection of past times
+    if (selectedDate && isTimeInPast(selectedDate, time)) {
+      return;
+    }
     setSelectedTime(time);
     setTimePickerOpen(false);
   };
@@ -241,8 +322,13 @@ export default function BookPage() {
         end: {
           dateTime: endTime.toISOString(),
           timeZone: 'UTC'
-        }
-        // Removed location field
+        },
+        // Include customer data for database storage
+        customerName: bookingForm.customerName,
+        customerEmail: bookingForm.customerEmail,
+        customerPhone: bookingForm.customerPhone,
+        numberOfPeople: numberOfPeople,
+        specialRequests: bookingForm.specialRequests
       };
 
       console.log('Creating booking event:', eventData);
@@ -294,7 +380,7 @@ export default function BookPage() {
   };
 
   // Get time slots for selected date
-  const timeSlots = selectedDate ? generateTimeSlotsForDateWithDisplay(selectedDate) : [];
+  const timeSlots = selectedDate ? generateTimeSlotsForDateWithDisplay(selectedDate, adminSettings) : [];
 
   return (
     <main className="flex items-center justify-center min-h-[80vh] bg-[#cce6f4]">
@@ -420,17 +506,25 @@ export default function BookPage() {
                     <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-10 max-h-60 overflow-hidden">
                       <div className="max-h-60 overflow-y-auto">
                         {timeSlots.length > 0 ? (
-                          timeSlots.map((slot) => (
-                            <button
-                              key={slot.value}
-                              onClick={() => handleTimeSelect(slot.value)}
-                              className={`w-full px-4 py-3 text-left hover:bg-[#e6f3f8] transition-colors text-[#175676] ${
-                                selectedTime === slot.value ? 'bg-[#e6f3f8] text-[#175676]' : ''
-                              }`}
-                            >
-                              {slot.display}
-                            </button>
-                          ))
+                          timeSlots.map((slot) => {
+                            const isPastTime = selectedDate && isTimeInPast(selectedDate, slot.value);
+                            return (
+                              <button
+                                key={slot.value}
+                                onClick={() => handleTimeSelect(slot.value)}
+                                disabled={isPastTime}
+                                className={`w-full px-4 py-3 text-left transition-colors ${
+                                  isPastTime 
+                                    ? 'text-gray-400 cursor-not-allowed bg-gray-50' 
+                                    : selectedTime === slot.value 
+                                      ? 'bg-[#e6f3f8] text-[#175676] hover:bg-[#e6f3f8]' 
+                                      : 'text-[#175676] hover:bg-[#e6f3f8]'
+                                }`}
+                              >
+                                {slot.display} {isPastTime && '(Past)'}
+                              </button>
+                            );
+                          })
                         ) : (
                           <div className="px-4 py-3 text-[#64748b] text-center">
                             No available times for this date
